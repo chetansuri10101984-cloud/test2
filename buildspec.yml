@@ -3,19 +3,15 @@ version: 0.2
 # CodeBuild buildspec: headless Kiro CLI remediation for claims-api.
 #
 # Triggered by the remediation trigger Lambda when a DevOps Agent
-# "Mitigation Completed" event lands. The mitigation payload is passed in as
-# the MITIGATION_PAYLOAD environment variable (JSON). Kiro CLI, guided by
+# "Mitigation Completed" event lands. The mitigation payload arrives as the
+# MITIGATION_PAYLOAD env var (JSON). Kiro CLI, guided by
 # .kiro/steering/remediation-agent.md, applies the minimal fix to
 # app/validation.py and/or app/query.sql. Guardrails then validate the diff
 # before a branch is pushed and a GitHub pull request is opened.
 #
-# Required env (set by the CodeBuild project / trigger Lambda):
-#   MITIGATION_PAYLOAD   - JSON string: the extracted mitigation summary + plan
-#   GITHUB_OWNER         - e.g. chetansuri10101984-cloud
-#   GITHUB_REPO          - e.g. test2
-#   GITHUB_PAT_SECRET    - Secrets Manager id holding the GitHub PAT
-#   KIRO_API_KEY_SECRET  - Secrets Manager id holding the Kiro CLI API key
-#   AWS_REGION           - provided by CodeBuild
+# Required env (from the CodeBuild project / trigger Lambda):
+#   MITIGATION_PAYLOAD, GITHUB_OWNER, GITHUB_REPO, GITHUB_PAT_SECRET,
+#   KIRO_API_KEY_SECRET, AWS_REGION (provided by CodeBuild)
 
 env:
   shell: bash
@@ -25,85 +21,33 @@ phases:
     runtime-versions:
       python: 3.12
     commands:
-      - echo "=== INSTALL: fetching secrets and Kiro CLI ==="
+      - echo "INSTALL - fetch secrets and Kiro CLI"
       - export GITHUB_PAT="$(aws secretsmanager get-secret-value --secret-id "$GITHUB_PAT_SECRET" --query SecretString --output text)"
       - export KIRO_API_KEY="$(aws secretsmanager get-secret-value --secret-id "$KIRO_API_KEY_SECRET" --query SecretString --output text)"
-      - |
-        # Install Kiro CLI (official single-command installer; Linux + macOS).
-        curl -fsSL https://cli.kiro.dev/install | bash
+      - curl -fsSL https://cli.kiro.dev/install | bash
       - export PATH="$HOME/.local/bin:$PATH"
-      - command -v kiro-cli || { echo "kiro-cli not found in PATH after install"; exit 1; }
+      - command -v kiro-cli
       - kiro-cli --version || true
-      - |
-        # Headless mode cannot use /model; pin a capable default model up front.
-        kiro-cli settings chat.defaultModel "${KIRO_MODEL:-claude-sonnet-4.5}" || true
-        echo "model: $(kiro-cli settings chat.defaultModel || echo unknown)"
+      - kiro-cli settings chat.defaultModel "${KIRO_MODEL:-claude-sonnet-4.5}" || true
 
   pre_build:
     commands:
-      - echo "=== PRE_BUILD: capturing clean baseline ==="
-      - git config user.email "devops-agent-bot@users.noreply.github.com"
-      - git config user.name "aws-devops-agent-bot"
-      - git rev-parse HEAD > /tmp/base_sha.txt
-      - cat /tmp/base_sha.txt
-      - echo "$MITIGATION_PAYLOAD" > /tmp/mitigation.json
+      - echo "PRE_BUILD - generate Kiro prompt from mitigation payload"
+      - chmod +x bridge/guardrails.sh bridge/open_pr.sh
+      - printf '%s' "$MITIGATION_PAYLOAD" > /tmp/mitigation.json
       - python3 bridge/prompt_generator.py /tmp/mitigation.json > /tmp/kiro_prompt.txt
-      - echo "--- generated prompt ---"; cat /tmp/kiro_prompt.txt
+      - cat /tmp/kiro_prompt.txt
 
   build:
     commands:
-      - echo "=== BUILD: running headless Kiro CLI ==="
+      - echo "BUILD - run headless Kiro CLI"
       - export PATH="$HOME/.local/bin:$PATH"
       - export KIRO_API_KEY="$(aws secretsmanager get-secret-value --secret-id "$KIRO_API_KEY_SECRET" --query SecretString --output text)"
-      - |
-        kiro-cli chat --no-interactive --trust-tools=read,write,grep "$(cat /tmp/kiro_prompt.txt)" || {
-          echo "Kiro CLI exited non-zero"; exit 1; }
+      - kiro-cli chat --no-interactive --trust-tools=read,write,grep "$(cat /tmp/kiro_prompt.txt)"
 
   post_build:
     commands:
-      - echo "=== POST_BUILD: guardrails ==="
-      - |
-        set -euo pipefail
-        CHANGED="$(git diff --name-only)"
-        echo "Changed files:"; echo "$CHANGED"
-        # Guardrail 1: at most 2 files changed.
-        N="$(echo "$CHANGED" | grep -c . || true)"
-        if [ "$N" -eq 0 ]; then echo "GUARDRAIL: Kiro made no changes"; exit 1; fi
-        if [ "$N" -gt 2 ]; then echo "GUARDRAIL: too many files changed ($N > 2)"; exit 1; fi
-        # Guardrail 2: only the two allowed files.
-        for f in $CHANGED; do
-          case "$f" in
-            app/validation.py|app/query.sql) : ;;
-            *) echo "GUARDRAIL: protected/unexpected file modified: $f"; exit 1 ;;
-          esac
-        done
-        # Guardrail 3: python syntax check on changed .py files.
-        for f in $CHANGED; do
-          case "$f" in *.py) python3 -m py_compile "$f" || { echo "GUARDRAIL: py_compile failed on $f"; exit 1; } ;; esac
-        done
-        echo "Guardrails passed."
-      - echo "=== POST_BUILD: push branch + open GitHub PR ==="
-      - |
-        set -euo pipefail
-        BR="devops-agent/remediate-claims-422-$(date +%Y%m%d-%H%M%S)"
-        git checkout -b "$BR"
-        git add app/validation.py app/query.sql 2>/dev/null || git add -A
-        git commit -m "fix(claims-api): restore valid claim validation (auto-remediation)
-
-Automated fix generated by Kiro CLI from the AWS DevOps Agent mitigation
-plan for the claims-api HTTP 422 incident. Restores the reference-length
-boundary and the claim_type allowlist so valid POST /claims requests are
-accepted. Human review required before merge."
-        git push "https://${GITHUB_OWNER}:${GITHUB_PAT}@github.com/${GITHUB_OWNER}/${GITHUB_REPO}.git" "HEAD:${BR}" 2>&1 | sed "s/${GITHUB_PAT}/***REDACTED***/g"
-        # Open the PR via the GitHub REST API.
-        PR_BODY="$(python3 -c "import json,sys; print(json.dumps(open('/tmp/mitigation.json').read()))")"
-        HTTP_RESP="$(curl -sS -X POST \
-          -H "Authorization: Bearer ${GITHUB_PAT}" \
-          -H "Accept: application/vnd.github+json" \
-          "https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/pulls" \
-          -d "{\"title\":\"fix(claims-api): auto-remediation for HTTP 422 incident\",\"head\":\"${BR}\",\"base\":\"main\",\"body\":\"This pull request was generated automatically by Kiro CLI from the AWS DevOps Agent mitigation plan.\\n\\nIt restores valid claim validation in the claims-api service (reference-length boundary and claim_type allowlist) so that valid POST /claims requests are no longer rejected with HTTP 422.\\n\\n**Human review required before merge.**\"}" )"
-        echo "$HTTP_RESP" | sed "s/${GITHUB_PAT}/***REDACTED***/g" | python3 -c "import json,sys; d=json.load(sys.stdin); print('PR opened:', d.get('html_url') or d.get('message'))"
-
-artifacts:
-  files:
-    - '**/*'
+      - echo "POST_BUILD - guardrails then branch + PR"
+      - bash bridge/guardrails.sh
+      - export GITHUB_PAT="$(aws secretsmanager get-secret-value --secret-id "$GITHUB_PAT_SECRET" --query SecretString --output text)"
+      - bash bridge/open_pr.sh
