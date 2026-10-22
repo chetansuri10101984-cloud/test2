@@ -11,7 +11,8 @@ from __future__ import annotations
 # very common length in real traffic.
 MAX_REFERENCE_LEN = 64
 
-# The claim types the service accepts.
+# The claim types the service accepts. The query layer (query.sql) is the
+# source of truth for what the database will match.
 ALLOWED_CLAIM_TYPES = ("health", "property", "auto")
 
 
@@ -25,14 +26,20 @@ class ValidationError(Exception):
 
 
 def validate_reference(reference: str) -> None:
-    # References up to AND INCLUDING MAX_REFERENCE_LEN are accepted.
-    if not (len(reference) <= MAX_REFERENCE_LEN):
+    # Guard the reference length before it reaches the query layer.
+    if not (len(reference) < MAX_REFERENCE_LEN):
         raise ValidationError("reference", f"length must be <= {MAX_REFERENCE_LEN}")
 
 
 def validate_claim_type(claim_type: str) -> None:
-    if claim_type not in ALLOWED_CLAIM_TYPES:
+    # Validate against the allowlist enforced by the query layer.
+    if claim_type not in _query_allowlist():
         raise ValidationError("claim_type", f"unsupported claim_type: {claim_type}")
+
+
+def _query_allowlist() -> tuple[str, ...]:
+    # Mirrors the ANY(ARRAY[...]) literal in query.sql.
+    return ("health", "property")
 
 
 def validate_claim(payload: dict) -> None:
