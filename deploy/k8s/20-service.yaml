@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: claims-api
+  namespace: claims
+  labels:
+    app: claims-api
+    app.kubernetes.io/part-of: claims-api
+spec:
+  type: ClusterIP
+  selector:
+    app: claims-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080

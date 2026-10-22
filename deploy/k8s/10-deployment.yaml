@@ -1,0 +1,52 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: claims-api
+  namespace: claims
+  labels:
+    app: claims-api
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: claims-api
+  template:
+    metadata:
+      labels:
+        app: claims-api
+    spec:
+      containers:
+        - name: claims-api
+          image: 725425002230.dkr.ecr.eu-west-1.amazonaws.com/devops-agent-eks/claims-api:v1.4.2
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          env:
+            - name: DB_HOST
+              valueFrom: { secretKeyRef: { name: claims-db, key: host } }
+            - name: DB_PORT
+              valueFrom: { secretKeyRef: { name: claims-db, key: port } }
+            - name: DB_NAME
+              valueFrom: { secretKeyRef: { name: claims-db, key: dbname } }
+            - name: DB_USER
+              valueFrom: { secretKeyRef: { name: claims-db, key: username } }
+            - name: DB_PASSWORD
+              valueFrom: { secretKeyRef: { name: claims-db, key: password } }
