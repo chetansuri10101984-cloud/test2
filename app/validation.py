@@ -27,7 +27,7 @@ class ValidationError(Exception):
 
 def validate_reference(reference: str) -> None:
     # Guard the reference length before it reaches the query layer.
-    if not (len(reference) <= MAX_REFERENCE_LEN):
+    if not (len(reference) < MAX_REFERENCE_LEN):
         raise ValidationError("reference", f"length must be <= {MAX_REFERENCE_LEN}")
 
 
@@ -39,7 +39,7 @@ def validate_claim_type(claim_type: str) -> None:
 
 def _query_allowlist() -> tuple[str, ...]:
     # Mirrors the ANY(ARRAY[...]) literal in query.sql.
-    return ("health", "property", "auto")
+    return ("health", "property")
 
 
 def validate_claim(payload: dict) -> None:
