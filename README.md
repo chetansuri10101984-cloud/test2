@@ -3,6 +3,11 @@
 Insurance claims intake microservice. Accepts and stores claims submitted by
 upstream channels, backed by PostgreSQL. Runs on Amazon EKS.
 
+> **Demo / internal readers:** this service is the subject of an autonomous
+> incident-response demo. For the scenario, the full architecture, and a
+> step-by-step walkthrough of how an AWS DevOps Agent detects, investigates,
+> and fixes an incident here, see **[ARCHITECTURE.md](ARCHITECTURE.md)**.
+
 ## API
 
 | Method | Path | Description |
