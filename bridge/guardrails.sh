@@ -3,6 +3,10 @@
 # small, syntactically valid diff. Abort the build (exit 1) on any violation.
 set -euo pipefail
 
+# Ignore file-mode-only changes (the buildspec chmod +x's helper scripts, which
+# would otherwise show up as modifications). We only care about content edits.
+git config core.fileMode false
+
 CHANGED="$(git diff --name-only)"
 echo "Changed files:"
 echo "$CHANGED"
