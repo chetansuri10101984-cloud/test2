@@ -84,7 +84,7 @@ nothing is down, yet the service is failing customers.
         ┌──────────────────┐   guided by imported Skill        │
         │  DevOps Agent     │   "claims-api-4xx-investigation"  │
         │  SANDBOX          │◀──────────────────────────────────┘
-        │  (ephemeral,      │   runs boto3 + CloudWatch Logs Insights
+        │  (ephemeral,      │   runs Python (stdlib) + AWS CLI + Logs Insights
         │   agent-owned)    │   -> quantify 422, isolate input signature,
         └──────────────────┘   correlate to commit, pinpoint defect
                  │
@@ -134,8 +134,9 @@ DevOps Agent in the middle.
 5. **Autonomous investigation + Skill + Sandbox.** The agent picks up the
    incident and matches the imported **Skill**
    `claims-api-4xx-investigation`, which gives it a deterministic 5-step
-   procedure. It provisions its **own ephemeral sandbox** and runs diagnostic
-   code there (boto3 + CloudWatch Logs Insights) to:
+   procedure. It provisions its **own ephemeral sandbox**, writes a small
+   standard-library Python script (`/tmp/claims_diag.py`) that calls the AWS CLI
+   and CloudWatch Logs Insights, and runs it to:
    - quantify the 422 rate and confirm there are no 5xx (→ validation
      regression, not an outage);
    - decompose the 422s by `claim_type` and `ref_len` to find the exact failing
@@ -181,9 +182,11 @@ DevOps Agent in the middle.
   itself. That's what makes it a real demonstration rather than a scripted one.
 - **The sandbox is the agent's, not ours.** All diagnostic code runs inside the
   DevOps Agent's own ephemeral sandbox, which it provisions and discards per
-  investigation. The Skill's code uses only boto3 + the Python standard library
-  + AWS endpoints, so it needs no extra packages and no outbound internet — it
-  runs in the sandbox with zero additional configuration.
+  investigation. The sandbox runs Python 3.9 and the AWS CLI (with read-only
+  credentials), has no outbound internet, and does not include boto3. The
+  Skill's code therefore uses only the Python standard library and calls the
+  AWS CLI, so it needs no packages and no configuration change, and runs first
+  time.
 - **The fix is written by an agent, with guardrails.** Headless Kiro CLI writes
   the actual diff, but a steering file constrains it to the two validation files
   and a buildspec guardrail enforces that constraint before any PR is opened.
